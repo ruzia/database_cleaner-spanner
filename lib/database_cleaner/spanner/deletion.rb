@@ -34,12 +34,14 @@ module DatabaseCleaner
         only: [],
         except: [],
         batch_deletion: false,
-        cache_tables: true
+        cache_tables: true,
+        timeout: 3
       )
         @only = only
         @except = except
         @batch_deletion = batch_deletion
         @cache_tables = cache_tables
+        @timeout = timeout.to_i
 
         @deletable_tables = {}
       end
@@ -55,7 +57,7 @@ module DatabaseCleaner
       private
 
       def clean_as_batch
-        client.transaction do |tx|
+        client.transaction(**client_transaction_options) do |tx|
           tx.batch_update do |b|
             each_deletable_table do |table|
               b.batch_update("DELETE #{table} WHERE TRUE")
@@ -66,7 +68,7 @@ module DatabaseCleaner
 
       def clean_each
         each_deletable_table do |table|
-          client.delete(table)
+          client.delete(table, call_options: client_call_options)
         end
       end
 
@@ -99,7 +101,7 @@ module DatabaseCleaner
         return @sorted_table_groups if @cache_tables && @sorted_table_groups
 
         dep = TableDependency.new
-        result = client.execute_query(SQL)
+        result = client.execute_query(SQL, call_options: client_call_options)
 
         result.rows.each do |row|
           dep.add_child(row[:table_name], row[:child_table_name])
@@ -123,6 +125,23 @@ module DatabaseCleaner
           end
       end
 
+      # fail fast
+      def client_transaction_options
+        {
+          call_options: client_call_options,
+          deadline: @timeout
+        }
+      end
+
+      def client_call_options
+        {
+          timeout: @timeout,
+          retry_policy: {
+            max_delay: @timeout
+          }
+        }
+      end
+
       def configure_client_from_active_record(name)
         # "primary" is hardcoded in ActiveRecord
         # https://github.com/rails/rails/blob/v7.0.4/activerecord/lib/active_record/database_configurations.rb
@@ -132,7 +151,7 @@ module DatabaseCleaner
         config = ::ActiveRecord::Base.configurations.configs_for(name: name.to_s).configuration_hash
 
         # Keep metadata tables
-        @except << ::ActiveRecord::SchemaMigration.table_name # schema_migrations
+        @except << ::ActiveRecord::Base.connection.schema_migration.table_name # schema_migrations
         @except << ::ActiveRecord::Base.internal_metadata_table_name # ar_internal_metadata
 
         Google::Cloud::Spanner.new(
