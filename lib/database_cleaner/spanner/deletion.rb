@@ -151,7 +151,11 @@ module DatabaseCleaner
         config = ::ActiveRecord::Base.configurations.configs_for(name: name.to_s).configuration_hash
 
         # Keep metadata tables
-        @except << ::ActiveRecord::Base.connection.schema_migration.table_name # schema_migrations
+        @except << if ::ActiveRecord.version < ::Gem::Version.new("7.2")
+                     ::ActiveRecord::Base.connection.schema_migration.table_name
+                   else
+                     ::ActiveRecord::Base.connection_pool.schema_migration.table_name
+                   end
         @except << ::ActiveRecord::Base.internal_metadata_table_name # ar_internal_metadata
 
         Google::Cloud::Spanner.new(
